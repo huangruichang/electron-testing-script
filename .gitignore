@@ -1,0 +1,6 @@
+.idea/
+src/result/
+scripts/testing.json
+node_modules/
+
+src/testing.json
