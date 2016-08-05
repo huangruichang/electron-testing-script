@@ -1,5 +1,5 @@
 .idea/
-src/result/
+src/result/*
 scripts/testing.json
 node_modules/
 

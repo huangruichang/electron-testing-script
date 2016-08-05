@@ -1,9 +1,10 @@
 
-var app = require('app');
+var app = require('electron').app;
 var ipc = require('electron').ipcMain;
-var BrowserWindow = require('browser-window');
+var BrowserWindow = require('electron').BrowserWindow;
 var testing = require('./testing.json');
 var fs = require('fs');
+var join = require('path').join;
 var marked = require('marked');
 var Promise = require('bluebird');
 
@@ -20,6 +21,8 @@ var mainWindow = null;
 var processes = testing.processes;
 var sessionCookies = testing.cookies;
 var testing_url = testing.url;
+var api_filter = testing.api_filter || [];
+var js_filter = testing.js_filter || [];
 
 var networkMap = {
     '2G': {
@@ -31,6 +34,11 @@ var networkMap = {
         latency: 100,
         downloadThroughput: 128000,
         uploadThroughput: 128000
+    },
+    '4G': {
+        latency: 20,
+        downloadThroughput: 384000,
+        uploadThroughput: 384000
     }
 };
 
@@ -38,7 +46,7 @@ var argv = process.argv.slice(2);
 var emulation = false;
 
 // network emulate
-var network = argv.indexOf('-network');
+var network = argv.indexOf('--network');
 if (network != -1) {
     var type = argv[network + 1];
     emulation = networkMap[type];
@@ -47,12 +55,34 @@ if (network != -1) {
 var index = 0;
 var reqs = [];
 
+var isJS = function (url) {
+    for (var i = 0; i < js_filter.length; i++) {
+        if (url.indexOf(js_filter[i]) != -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+var isAPI = function (url) {
+    for (var i = 0; i < api_filter.length; i++) {
+        if (url.indexOf(api_filter[i]) != -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
 app.on('ready', function () {
 
     mainWindow = new BrowserWindow({
         "width": 800,
         "height": 600,
-        "center": true
+        "center": true,
+        "webPreferences": {
+            "nodeIntegration": false,
+            "preload": join(__dirname, 'scripts/', "preload.js")
+        }
     });
 
     var webContents = mainWindow.webContents;
@@ -81,7 +111,8 @@ app.on('ready', function () {
                 var test_process = processes[index];
 
                 var code = [
-                    'var ipc = require("electron").ipcRenderer;',
+                    //'var ipc = require("electron").ipcRenderer;',
+                    'var ipc = window.ipc;',
                     'var data = { name: "' + test_process.name + '" , url: "' + test_process.url + '", timing: window.performance.timing };',
                     'var timing_str = JSON.stringify(data);',
                     'ipc.send("test.performance", timing_str);'
@@ -101,13 +132,35 @@ app.on('ready', function () {
                     return;
                 }
                 var key = test_process.name + '-' + details.id;
-                reqs.push({
-                    id: details.id,
-                    resourceType: details.resourceType,
-                    key: key,
-                    started_at: details.timestamp,
-                    url: details.url
-                });
+                // reqs.push({
+                //     id: details.id,
+                //     resourceType: details.resourceType,
+                //     key: key,
+                //     started_at: details.timestamp,
+                //     url: details.url
+                // });
+
+                if (api_filter.length > 0 || js_filter.length > 0) {
+                    var is_api = isAPI(details.url);
+                    var is_js = isJS(details.url);
+                    if (is_api || is_js) {
+                        reqs.push({
+                            id: details.id,
+                            resourceType: details.resourceType,
+                            key: key,
+                            started_at: details.timestamp,
+                            url: details.url
+                        });
+                    } else {
+                        reqs.push({
+                            id: details.id,
+                            resourceType: details.resourceType,
+                            key: key,
+                            started_at: details.timestamp,
+                            url: details.url
+                        });
+                    }
+                }
 
                 details.requestHeaders['User-Agent'] =  testing.userAgent || "Mozilla/5.0 (iPhone; CPU iPhone OS 8_0 like Mac OS X) AppleWebKit/600.1.3 (KHTML, like Gecko) Version/8.0 Mobile/12A4345d Safari/600.1.4";
                 callback({cancel: false, requestHeaders: details.requestHeaders});
@@ -148,6 +201,8 @@ app.on('ready', function () {
             };
 
             next(0);
+        }).catch(function (e) {
+            console.log(e);
         });
     });
 });
@@ -193,11 +248,11 @@ var caculate = function (results, items) {
         };
         reqs.forEach(function (req) {
             if (!req.duration) return;
-            if (req.url.indexOf('.js') != -1 && req.duration > js.time) {
+            if (req.url.indexOf('.js') != -1 && (req.duration > js.time) && isJS(req.url)) {
                 js.time = req.duration;
                 js.url = req.url;
             }
-            if (req.duration > request.time) {
+            if (req.duration > request.time && isAPI(req.url)) {
                 request.time = req.duration;
                 request.url = req.url;
             }
@@ -275,7 +330,10 @@ ipc.on('test.performance', function (event, arg) {
                 '</body></html>'
             ].join('');
 
-            fs.writeFile('./result/' + filename, result_data, function () {
+            fs.writeFile('./result/' + filename, result_data, function (err) {
+                if (err) {
+                    return console.log(err);
+                }
                 console.log('completed!');
                 app.quit();
             });
